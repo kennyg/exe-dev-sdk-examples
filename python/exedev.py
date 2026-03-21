@@ -85,12 +85,112 @@ class VM:
 
 
 @dataclass
+class NewVMResponse:
+    vm_name: str
+    ssh_command: str = ""
+    ssh_dest: str = ""
+    ssh_port: int = 0
+    https_url: str = ""
+    proxy_port: int = 0
+    shelley_url: str = ""
+    vscode_url: str = ""
+    xterm_url: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> NewVMResponse:
+        return cls(
+            vm_name=d.get("vm_name", ""),
+            ssh_command=d.get("ssh_command", ""),
+            ssh_dest=d.get("ssh_dest", ""),
+            ssh_port=d.get("ssh_port", 0),
+            https_url=d.get("https_url", ""),
+            proxy_port=d.get("proxy_port", 0),
+            shelley_url=d.get("shelley_url", ""),
+            vscode_url=d.get("vscode_url", ""),
+            xterm_url=d.get("xterm_url", ""),
+        )
+
+
+@dataclass
+class CpResponse:
+    name: str = ""
+    source: str = ""
+    ssh: str = ""
+    state: str = ""
+    elapsed: float = 0.0
+
+    @classmethod
+    def from_dict(cls, d: dict) -> CpResponse:
+        return cls(
+            name=d.get("name", ""),
+            source=d.get("source", ""),
+            ssh=d.get("ssh", ""),
+            state=d.get("state", ""),
+            elapsed=d.get("elapsed", 0.0),
+        )
+
+
+@dataclass
+class RmResponse:
+    deleted: list[str] = field(default_factory=list)
+    failed: list = field(default_factory=list)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> RmResponse:
+        return cls(
+            deleted=d.get("deleted", []),
+            failed=d.get("failed", []),
+        )
+
+
+@dataclass
+class RestartResponse:
+    status: str = ""
+    vm_name: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> RestartResponse:
+        return cls(
+            status=d.get("status", ""),
+            vm_name=d.get("vm_name", ""),
+        )
+
+
+@dataclass
+class RenameResponse:
+    old_name: str = ""
+    new_name: str = ""
+    status: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> RenameResponse:
+        return cls(
+            old_name=d.get("old_name", ""),
+            new_name=d.get("new_name", ""),
+            status=d.get("status", ""),
+        )
+
+
+@dataclass
+class TagResponse:
+    tags: list[str] = field(default_factory=list)
+    vm_name: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> TagResponse:
+        return cls(
+            tags=d.get("tags", []),
+            vm_name=d.get("vm_name", ""),
+        )
+
+
+@dataclass
 class SSHKey:
     name: str
     fingerprint: str
-    key_type: str = ""
-    added: str = ""
     public_key: str = ""
+    added_at: Optional[str] = None
+    last_used_at: Optional[str] = None
     current: bool = False
 
     @classmethod
@@ -98,9 +198,9 @@ class SSHKey:
         return cls(
             name=d.get("name", ""),
             fingerprint=d.get("fingerprint", ""),
-            key_type=d.get("key_type", ""),
-            added=d.get("added", ""),
             public_key=d.get("public_key", ""),
+            added_at=d.get("added_at"),
+            last_used_at=d.get("last_used_at"),
             current=d.get("current", False),
         )
 
@@ -108,14 +208,12 @@ class SSHKey:
 @dataclass
 class UserInfo:
     email: str
-    username: str = ""
     ssh_keys: list[SSHKey] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, d: dict) -> UserInfo:
         return cls(
             email=d["email"],
-            username=d.get("username", ""),
             ssh_keys=[SSHKey.from_dict(k) for k in d.get("ssh_keys", [])],
         )
 
@@ -146,6 +244,63 @@ class ShareInfo:
             team_shelley=d.get("team_shelley", False),
             team_ssh=d.get("team_ssh", False),
             teams=d.get("teams", []),
+        )
+
+
+@dataclass
+class ShareUpdateResponse:
+    status: str = ""
+    share: str = ""
+    port: int = 0
+    vm_name: str = ""
+    team_access: bool = False
+    team_shelley: bool = False
+    team_ssh: bool = False
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ShareUpdateResponse:
+        return cls(
+            status=d.get("status", ""),
+            share=d.get("share", ""),
+            port=d.get("port", 0),
+            vm_name=d.get("vm_name", ""),
+            team_access=d.get("team_access", False),
+            team_shelley=d.get("team_shelley", False),
+            team_ssh=d.get("team_ssh", False),
+        )
+
+
+@dataclass
+class ShareAddLinkResponse:
+    status: str = ""
+    url: str = ""
+    token: str = ""
+    vm_name: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ShareAddLinkResponse:
+        return cls(
+            status=d.get("status", ""),
+            url=d.get("url", ""),
+            token=d.get("token", ""),
+            vm_name=d.get("vm_name", ""),
+        )
+
+
+@dataclass
+class ShareReceiveEmailResponse:
+    status: str = ""
+    email_enabled: bool = False
+    email_address: Optional[str] = None
+    vm_name: str = ""
+
+    @classmethod
+    def from_dict(cls, d: dict) -> ShareReceiveEmailResponse:
+        return cls(
+            status=d.get("status", ""),
+            email_enabled=d.get("email_enabled", False),
+            email_address=d.get("email_address"),
+            vm_name=d.get("vm_name", ""),
         )
 
 
@@ -563,7 +718,7 @@ class Client:
         integration: Optional[list[str]] = None,
         prompt: Optional[str] = None,
         no_email: bool = False,
-    ) -> VM:
+    ) -> NewVMResponse:
         parts = ["new"]
         if name is not None:
             _validate_identifier(name)
@@ -584,25 +739,28 @@ class Client:
             parts.append("--no-email")
         parts.append("--json")
         body = self._exec(" ".join(parts))
-        return VM.from_dict(json.loads(body))
+        return NewVMResponse.from_dict(json.loads(body))
 
-    def rm(self, *vm_names: str) -> None:
+    def rm(self, *vm_names: str) -> RmResponse:
         if not vm_names:
             raise ExeDevError(0, "at least one VM name is required")
         for n in vm_names:
             _validate_identifier(n)
-        self._exec("rm " + " ".join(vm_names))
+        body = self._exec("rm " + " ".join(vm_names))
+        return RmResponse.from_dict(json.loads(body))
 
-    def restart(self, vm_name: str) -> None:
+    def restart(self, vm_name: str) -> RestartResponse:
         _validate_identifier(vm_name)
-        self._exec(f"restart {vm_name}")
+        body = self._exec(f"restart {vm_name}")
+        return RestartResponse.from_dict(json.loads(body))
 
-    def rename(self, vm_name: str, new_name: str) -> None:
+    def rename(self, vm_name: str, new_name: str) -> RenameResponse:
         _validate_identifier(vm_name)
         _validate_identifier(new_name)
-        self._exec(f"rename {vm_name} {new_name}")
+        body = self._exec(f"rename {vm_name} {new_name}")
+        return RenameResponse.from_dict(json.loads(body))
 
-    def cp(self, vm_name: str, new_name: Optional[str] = None) -> VM:
+    def cp(self, vm_name: str, new_name: Optional[str] = None) -> CpResponse:
         _validate_identifier(vm_name)
         parts = ["cp", vm_name]
         if new_name is not None:
@@ -610,17 +768,19 @@ class Client:
             parts.append(new_name)
         parts.append("--json")
         body = self._exec(" ".join(parts))
-        return VM.from_dict(json.loads(body))
+        return CpResponse.from_dict(json.loads(body))
 
-    def tag(self, vm_name: str, tag_name: str) -> None:
+    def tag(self, vm_name: str, tag_name: str) -> TagResponse:
         _validate_identifier(vm_name)
         _validate_identifier(tag_name)
-        self._exec(f"tag {vm_name} {tag_name}")
+        body = self._exec(f"tag {vm_name} {tag_name}")
+        return TagResponse.from_dict(json.loads(body))
 
-    def untag(self, vm_name: str, tag_name: str) -> None:
+    def untag(self, vm_name: str, tag_name: str) -> TagResponse:
         _validate_identifier(vm_name)
         _validate_identifier(tag_name)
-        self._exec(f"tag -d {vm_name} {tag_name}")
+        body = self._exec(f"tag -d {vm_name} {tag_name}")
+        return TagResponse.from_dict(json.loads(body))
 
     # -- Sharing & Access ---------------------------------------------------
 
@@ -629,19 +789,22 @@ class Client:
         body = self._exec(f"share show {vm_name} --json")
         return ShareInfo.from_dict(json.loads(body))
 
-    def share_set_public(self, vm_name: str) -> None:
+    def share_set_public(self, vm_name: str) -> ShareUpdateResponse:
         _validate_identifier(vm_name)
-        self._exec(f"share set-public {vm_name}")
+        body = self._exec(f"share set-public {vm_name}")
+        return ShareUpdateResponse.from_dict(json.loads(body))
 
-    def share_set_private(self, vm_name: str) -> None:
+    def share_set_private(self, vm_name: str) -> ShareUpdateResponse:
         _validate_identifier(vm_name)
-        self._exec(f"share set-private {vm_name}")
+        body = self._exec(f"share set-private {vm_name}")
+        return ShareUpdateResponse.from_dict(json.loads(body))
 
-    def share_port(self, vm_name: str, port: int) -> None:
+    def share_port(self, vm_name: str, port: int) -> ShareUpdateResponse:
         if port < 1 or port > 65535:
             raise ExeDevError(0, "port must be between 1 and 65535")
         _validate_identifier(vm_name)
-        self._exec(f"share port {vm_name} {port}")
+        body = self._exec(f"share port {vm_name} {port}")
+        return ShareUpdateResponse.from_dict(json.loads(body))
 
     def share_add(self, vm_name: str, email: str) -> None:
         _validate_identifier(vm_name)
@@ -651,19 +814,20 @@ class Client:
         _validate_identifier(vm_name)
         self._exec(f"share remove {vm_name} {email}")
 
-    def share_add_link(self, vm_name: str) -> str:
+    def share_add_link(self, vm_name: str) -> ShareAddLinkResponse:
         _validate_identifier(vm_name)
         body = self._exec(f"share add-link {vm_name} --json")
-        return json.loads(body)["link"]
+        return ShareAddLinkResponse.from_dict(json.loads(body))
 
     def share_remove_link(self, vm_name: str) -> None:
         _validate_identifier(vm_name)
         self._exec(f"share remove-link {vm_name}")
 
-    def share_receive_email(self, vm_name: str, enabled: bool) -> None:
+    def share_receive_email(self, vm_name: str, enabled: bool) -> ShareReceiveEmailResponse:
         _validate_identifier(vm_name)
         state = "on" if enabled else "off"
-        self._exec(f"share receive-email {vm_name} {state}")
+        body = self._exec(f"share receive-email {vm_name} {state}")
+        return ShareReceiveEmailResponse.from_dict(json.loads(body))
 
     # -- SSH Key Management -------------------------------------------------
 
