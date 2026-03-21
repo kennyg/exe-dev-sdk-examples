@@ -1,0 +1,145 @@
+# exe.dev Go SDK Usage
+
+## Quick Start
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    exedev "github.com/kennyg/exe-dev-sdk-examples/go"
+)
+
+func main() {
+    key, _ := os.ReadFile(os.ExpandEnv("$HOME/.ssh/id_ed25519"))
+    client, err := exedev.NewClient(key)
+    if err != nil {
+        log.Fatal(err)
+    }
+
+    ctx := context.Background()
+
+    // List VMs
+    vms, _ := client.Ls(ctx, false, false)
+    for _, vm := range vms {
+        fmt.Printf("%s (%s)\n", vm.VMName, vm.Status)
+    }
+
+    // Create a VM
+    resp, _ := client.New(ctx, exedev.NewOpts{Name: strPtr("my-vm")})
+    fmt.Println(resp.SSHCommand)
+}
+
+func strPtr(s string) *string { return &s }
+```
+
+## Authentication
+
+### Local SSH Key
+
+```go
+key, err := os.ReadFile("/path/to/id_ed25519")
+client, err := exedev.NewClient(key)
+```
+
+### SSH Agent (1Password, macOS Keychain, etc.)
+
+```go
+client, err := exedev.NewClient(nil) // uses SSH_AUTH_SOCK
+```
+
+## Method Reference
+
+### VM Management
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `Ls` | `(ctx, all bool, detailed bool)` | `([]VM, error)` |
+| `New` | `(ctx, opts NewOpts)` | `(*NewVMResponse, error)` |
+| `Rm` | `(ctx, vmNames ...string)` | `(*RmResponse, error)` |
+| `Restart` | `(ctx, vmName string)` | `(*RestartResponse, error)` |
+| `Rename` | `(ctx, vmName, newName string)` | `(*RenameResponse, error)` |
+| `Cp` | `(ctx, vmName string, newName *string)` | `(*CpResponse, error)` |
+| `Tag` | `(ctx, vmName, tagName string)` | `(*TagResponse, error)` |
+| `Untag` | `(ctx, vmName, tagName string)` | `(*TagResponse, error)` |
+
+### Sharing & Access
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `ShareShow` | `(ctx, vmName string)` | `(*ShareInfo, error)` |
+| `ShareSetPublic` | `(ctx, vmName string)` | `(*ShareUpdateResponse, error)` |
+| `ShareSetPrivate` | `(ctx, vmName string)` | `(*ShareUpdateResponse, error)` |
+| `SharePort` | `(ctx, vmName string, port int)` | `(*ShareUpdateResponse, error)` |
+| `ShareAdd` | `(ctx, vmName, email string)` | `error` |
+| `ShareRemove` | `(ctx, vmName, email string)` | `error` |
+| `ShareAddLink` | `(ctx, vmName string)` | `(*ShareAddLinkResponse, error)` |
+| `ShareRemoveLink` | `(ctx, vmName string)` | `error` |
+| `ShareReceiveEmail` | `(ctx, vmName string, enabled bool)` | `(*ShareReceiveEmailResponse, error)` |
+
+### SSH Key Management
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `SSHKeyList` | `(ctx)` | `([]SSHKey, error)` |
+| `SSHKeyAdd` | `(ctx, publicKey string)` | `error` |
+| `SSHKeyRemove` | `(ctx, fingerprint string)` | `error` |
+| `SSHKeyRename` | `(ctx, fingerprint, newName string)` | `error` |
+
+### User & Shelley
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `Whoami` | `(ctx)` | `(*UserInfo, error)` |
+| `ShelleyInstall` | `(ctx, vmName string)` | `error` |
+| `ShelleyPrompt` | `(ctx, vmName, prompt string)` | `error` |
+
+### Token Generation
+
+| Method | Signature | Returns |
+|--------|-----------|---------|
+| `GenerateToken` | `(permissions *TokenPermissions)` | `(string, error)` |
+| `GenerateVMToken` | `(vmName string, permissions *TokenPermissions)` | `(string, error)` |
+
+## Error Handling
+
+```go
+vms, err := client.Ls(ctx, false, false)
+if err != nil {
+    var exeErr *exedev.ExeDevError
+    if errors.As(err, &exeErr) {
+        fmt.Printf("API error %d: %s\n", exeErr.StatusCode, exeErr.Message)
+    }
+}
+```
+
+## Token Generation
+
+```go
+// Global token
+token, err := client.GenerateToken(nil)
+
+// Token with permissions
+token, err := client.GenerateToken(&exedev.TokenPermissions{
+    Exp:  int64Ptr(1735689600),
+    Cmds: []string{"ls", "whoami"},
+})
+
+// VM-scoped token
+token, err := client.GenerateVMToken("my-vm", nil)
+```
+
+## Client Options
+
+```go
+client, err := exedev.NewClient(key,
+    exedev.WithBaseURL("https://staging.exe.dev"),
+    exedev.WithPermissions(exedev.TokenPermissions{
+        Cmds: []string{"ls", "whoami"},
+    }),
+)
+```

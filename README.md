@@ -7,6 +7,7 @@ Example implementations for the [exe.dev SDK spec](https://github.com/kennyg/exe
 | Language | Directory | Status |
 |----------|-----------|--------|
 | Python | [python/](python/) | Complete |
+| Go | [go/](go/) | Complete |
 
 ## Contributing
 
