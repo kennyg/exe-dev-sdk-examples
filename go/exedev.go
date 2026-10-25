@@ -37,6 +37,21 @@ func validateIdentifier(value string) error {
 	return nil
 }
 
+// doubleQuoteSpecial matches runs of the only characters that are special
+// inside POSIX shell double quotes (XCU 2.2.3).
+var doubleQuoteSpecial = regexp.MustCompile("[\\\\\"$`]+")
+
+// doubleQuote quotes value as one POSIX shell word, in double quotes. Each run
+// of special characters goes in single quotes instead, where no character is
+// special. The adjacent quoted parts join into one word that expands to
+// exactly value. The form uses no backslash escapes, so sh and other POSIX
+// word splitters all agree on it.
+func doubleQuote(value string) string {
+	return `"` + doubleQuoteSpecial.ReplaceAllStringFunc(value, func(run string) string {
+		return `"'` + run + `'"`
+	}) + `"`
+}
+
 // ---------------------------------------------------------------------------
 // Errors
 // ---------------------------------------------------------------------------
@@ -596,7 +611,7 @@ func (c *Client) New(ctx context.Context, opts NewOpts) (*NewVMResponse, error) 
 		parts = append(parts, fmt.Sprintf("--integration=%s", i))
 	}
 	if opts.Prompt != nil {
-		parts = append(parts, fmt.Sprintf("--prompt=\"%s\"", *opts.Prompt))
+		parts = append(parts, "--prompt="+doubleQuote(*opts.Prompt))
 	}
 	if opts.NoEmail {
 		parts = append(parts, "--no-email")
@@ -965,7 +980,7 @@ func (c *Client) ShelleyPrompt(ctx context.Context, vmName, prompt string) error
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s \"%s\"", vmName, prompt))
+	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s %s", vmName, doubleQuote(prompt)))
 	return err
 }
 

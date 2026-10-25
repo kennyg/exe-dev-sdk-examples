@@ -42,6 +42,18 @@ def _validate_identifier(value: str) -> None:
         raise ExeDevError(0, "invalid characters in value")
 
 
+def _double_quote(value: str) -> str:
+    """Quote value as one POSIX shell word, in double quotes.
+
+    Inside double quotes, only `\\`, `"`, `$` and backtick are special
+    (POSIX XCU 2.2.3). Each run of them goes in single quotes instead, where
+    no character is special. The adjacent quoted parts join into one word
+    that expands to exactly `value`. The form uses no backslash escapes, so
+    `sh`, Python `shlex` and other POSIX word splitters all agree on it.
+    """
+    return '"' + re.sub(r'[\\"$`]+', lambda m: "\"'" + m.group() + "'\"", value) + '"'
+
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -741,7 +753,7 @@ class Client:
             for i in integration:
                 parts.append(f"--integration={i}")
         if prompt is not None:
-            parts.append(f'--prompt="{prompt}"')
+            parts.append(f"--prompt={_double_quote(prompt)}")
         if no_email:
             parts.append("--no-email")
         parts.append("--json")
@@ -869,4 +881,4 @@ class Client:
 
     def shelley_prompt(self, vm_name: str, prompt: str) -> None:
         _validate_identifier(vm_name)
-        self._exec(f'shelley prompt {vm_name} "{prompt}"')
+        self._exec(f"shelley prompt {vm_name} {_double_quote(prompt)}")
