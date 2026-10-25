@@ -23,7 +23,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import EllipticCurvePrivateKey
 from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
 from cryptography.hazmat.primitives.asymmetric.utils import decode_dss_signature
-from cryptography.hazmat.primitives.hashes import SHA256, SHA512
+from cryptography.hazmat.primitives.hashes import SHA256, SHA384, SHA512
 from cryptography.hazmat.primitives.serialization import (
     load_pem_private_key,
     load_ssh_private_key,
@@ -356,6 +356,13 @@ def _write_ssh_string(data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + data
 
 
+def _write_ssh_mpint(value: int) -> bytes:
+    """Encode a non-negative integer as an SSH mpint (RFC 4251 §5)."""
+    # Minimal big-endian bytes, plus a leading zero byte if the high bit is set.
+    data = value.to_bytes((value.bit_length() + 8) // 8, "big") if value else b""
+    return _write_ssh_string(data)
+
+
 def _read_ssh_string(data: bytes, offset: int) -> tuple[bytes, int]:
     length = struct.unpack(">I", data[offset : offset + 4])[0]
     return data[offset + 4 : offset + 4 + length], offset + 4 + length
@@ -495,14 +502,11 @@ def _ssh_sign(private_key: Any, message: bytes, namespace: str) -> bytes:
         sig_blob = _write_ssh_string(sig_algo) + _write_ssh_string(raw_sig)
         pub_key_blob = _rsa_pub_blob(private_key)
     elif isinstance(private_key, EllipticCurvePrivateKey):
-        raw_sig = private_key.sign(sig_data, ECDSA(SHA256()))
-        r, s = decode_dss_signature(raw_sig)
-        key_size = private_key.key_size
-        byte_len = (key_size + 7) // 8
-        ecdsa_sig_blob = _write_ssh_string(
-            r.to_bytes(byte_len, "big")
-        ) + _write_ssh_string(s.to_bytes(byte_len, "big"))
+        # RFC 5656 §6.2.1: the hash follows the curve size, and r and s are mpints.
         curve_name = _ecdsa_curve_name(private_key)
+        raw_sig = private_key.sign(sig_data, ECDSA(_ECDSA_HASHES[curve_name]()))
+        r, s = decode_dss_signature(raw_sig)
+        ecdsa_sig_blob = _write_ssh_mpint(r) + _write_ssh_mpint(s)
         sig_algo = f"ecdsa-sha2-{curve_name}".encode("utf-8")
         sig_blob = _write_ssh_string(sig_algo) + _write_ssh_string(ecdsa_sig_blob)
         pub_key_blob = _ecdsa_pub_blob(private_key)
@@ -558,6 +562,9 @@ def _rsa_pub_blob(key: RSAPrivateKey) -> bytes:
         + _write_ssh_string(e_bytes)
         + _write_ssh_string(n_bytes)
     )
+
+
+_ECDSA_HASHES = {"nistp256": SHA256, "nistp384": SHA384, "nistp521": SHA512}
 
 
 def _ecdsa_curve_name(key: EllipticCurvePrivateKey) -> str:
