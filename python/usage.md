@@ -100,6 +100,16 @@ except ExeDevError as e:
     print(f"Error {e.status_code}: {e.message}")
 ```
 
+### Name Validation
+
+VM names, tag names and SSH key names must be 1 to 63 ASCII letters, digits, hyphens or underscores, and must start with a letter or digit. The SDK checks every name before it builds a request. A bad name raises `ExeDevError` with status code 0, and no request goes to the server:
+
+| Name | Message |
+|------|---------|
+| `""` | `value must not be empty` |
+| `../etc`, `vm.x`, `vm/x`, `vm:x`, `vm@x`, `-d`, `vаm` (Cyrillic `а`) | `invalid characters in value` |
+| 64 or more characters | `value exceeds 63 characters` |
+
 ## Token Generation
 
 Generate tokens for use outside the SDK (e.g. git credentials):

@@ -10,6 +10,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import socket
 import struct
 from dataclasses import dataclass, field
@@ -34,12 +35,29 @@ from cryptography.hazmat.primitives.serialization import (
 # Validation
 # ---------------------------------------------------------------------------
 
-_SAFE_VALUE_RE = re.compile(r"^[a-zA-Z0-9._:@/\-]+$")
+# Identifiers (VM, tag and key names) become shell words in the command
+# body and DNS labels in "{vm}.exe.xyz". Only ASCII letters, digits, hyphens
+# and underscores are allowed. A leading hyphen would read as a flag, and a
+# DNS label holds at most 63 characters.
+_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]*")
+_IDENTIFIER_MAX_LEN = 63
 
 
 def _validate_identifier(value: str) -> None:
-    if not _SAFE_VALUE_RE.match(value):
+    if not isinstance(value, str):
         raise ExeDevError(0, "invalid characters in value")
+    if not value:
+        raise ExeDevError(0, "value must not be empty")
+    if not _IDENTIFIER_RE.fullmatch(value):
+        raise ExeDevError(0, "invalid characters in value")
+    if len(value) > _IDENTIFIER_MAX_LEN:
+        raise ExeDevError(0, f"value exceeds {_IDENTIFIER_MAX_LEN} characters")
+
+
+def _shell_identifier(value: str) -> str:
+    """Validate an identifier and return it as one quoted shell word."""
+    _validate_identifier(value)
+    return shlex.quote(value)
 
 
 # ---------------------------------------------------------------------------
@@ -721,8 +739,7 @@ class Client:
     ) -> NewVMResponse:
         parts = ["new"]
         if name is not None:
-            _validate_identifier(name)
-            parts.append(f"--name={name}")
+            parts.append(f"--name={_shell_identifier(name)}")
         if image is not None:
             parts.append(f"--image={image}")
         if command is not None:
@@ -744,89 +761,73 @@ class Client:
     def rm(self, *vm_names: str) -> RmResponse:
         if not vm_names:
             raise ExeDevError(0, "at least one VM name is required")
-        for n in vm_names:
-            _validate_identifier(n)
-        body = self._exec("rm " + " ".join(vm_names))
+        names = [_shell_identifier(n) for n in vm_names]
+        body = self._exec("rm " + " ".join(names))
         return RmResponse.from_dict(json.loads(body))
 
     def restart(self, vm_name: str) -> RestartResponse:
-        _validate_identifier(vm_name)
-        body = self._exec(f"restart {vm_name}")
+        body = self._exec(f"restart {_shell_identifier(vm_name)}")
         return RestartResponse.from_dict(json.loads(body))
 
     def rename(self, vm_name: str, new_name: str) -> RenameResponse:
-        _validate_identifier(vm_name)
-        _validate_identifier(new_name)
-        body = self._exec(f"rename {vm_name} {new_name}")
+        old, new = _shell_identifier(vm_name), _shell_identifier(new_name)
+        body = self._exec(f"rename {old} {new}")
         return RenameResponse.from_dict(json.loads(body))
 
     def cp(self, vm_name: str, new_name: Optional[str] = None) -> CpResponse:
-        _validate_identifier(vm_name)
-        parts = ["cp", vm_name]
+        parts = ["cp", _shell_identifier(vm_name)]
         if new_name is not None:
-            _validate_identifier(new_name)
-            parts.append(new_name)
+            parts.append(_shell_identifier(new_name))
         parts.append("--json")
         body = self._exec(" ".join(parts))
         return CpResponse.from_dict(json.loads(body))
 
     def tag(self, vm_name: str, tag_name: str) -> TagResponse:
-        _validate_identifier(vm_name)
-        _validate_identifier(tag_name)
-        body = self._exec(f"tag {vm_name} {tag_name}")
+        vm, tag = _shell_identifier(vm_name), _shell_identifier(tag_name)
+        body = self._exec(f"tag {vm} {tag}")
         return TagResponse.from_dict(json.loads(body))
 
     def untag(self, vm_name: str, tag_name: str) -> TagResponse:
-        _validate_identifier(vm_name)
-        _validate_identifier(tag_name)
-        body = self._exec(f"tag -d {vm_name} {tag_name}")
+        vm, tag = _shell_identifier(vm_name), _shell_identifier(tag_name)
+        body = self._exec(f"tag -d {vm} {tag}")
         return TagResponse.from_dict(json.loads(body))
 
     # -- Sharing & Access ---------------------------------------------------
 
     def share_show(self, vm_name: str) -> ShareInfo:
-        _validate_identifier(vm_name)
-        body = self._exec(f"share show {vm_name} --json")
+        body = self._exec(f"share show {_shell_identifier(vm_name)} --json")
         return ShareInfo.from_dict(json.loads(body))
 
     def share_set_public(self, vm_name: str) -> ShareUpdateResponse:
-        _validate_identifier(vm_name)
-        body = self._exec(f"share set-public {vm_name}")
+        body = self._exec(f"share set-public {_shell_identifier(vm_name)}")
         return ShareUpdateResponse.from_dict(json.loads(body))
 
     def share_set_private(self, vm_name: str) -> ShareUpdateResponse:
-        _validate_identifier(vm_name)
-        body = self._exec(f"share set-private {vm_name}")
+        body = self._exec(f"share set-private {_shell_identifier(vm_name)}")
         return ShareUpdateResponse.from_dict(json.loads(body))
 
     def share_port(self, vm_name: str, port: int) -> ShareUpdateResponse:
         if port < 1 or port > 65535:
             raise ExeDevError(0, "port must be between 1 and 65535")
-        _validate_identifier(vm_name)
-        body = self._exec(f"share port {vm_name} {port}")
+        body = self._exec(f"share port {_shell_identifier(vm_name)} {port}")
         return ShareUpdateResponse.from_dict(json.loads(body))
 
     def share_add(self, vm_name: str, email: str) -> None:
-        _validate_identifier(vm_name)
-        self._exec(f"share add {vm_name} {email}")
+        self._exec(f"share add {_shell_identifier(vm_name)} {email}")
 
     def share_remove(self, vm_name: str, email: str) -> None:
-        _validate_identifier(vm_name)
-        self._exec(f"share remove {vm_name} {email}")
+        self._exec(f"share remove {_shell_identifier(vm_name)} {email}")
 
     def share_add_link(self, vm_name: str) -> ShareAddLinkResponse:
-        _validate_identifier(vm_name)
-        body = self._exec(f"share add-link {vm_name} --json")
+        body = self._exec(f"share add-link {_shell_identifier(vm_name)} --json")
         return ShareAddLinkResponse.from_dict(json.loads(body))
 
     def share_remove_link(self, vm_name: str) -> None:
-        _validate_identifier(vm_name)
-        self._exec(f"share remove-link {vm_name}")
+        self._exec(f"share remove-link {_shell_identifier(vm_name)}")
 
     def share_receive_email(self, vm_name: str, enabled: bool) -> ShareReceiveEmailResponse:
-        _validate_identifier(vm_name)
         state = "on" if enabled else "off"
-        body = self._exec(f"share receive-email {vm_name} {state}")
+        body = self._exec(f"share receive-email {_shell_identifier(vm_name)} {state}")
         return ShareReceiveEmailResponse.from_dict(json.loads(body))
 
     # -- SSH Key Management -------------------------------------------------
@@ -846,7 +847,7 @@ class Client:
         self._exec(f"ssh-key remove {fingerprint}")
 
     def ssh_key_rename(self, fingerprint: str, new_name: str) -> None:
-        self._exec(f"ssh-key rename {fingerprint} {new_name}")
+        self._exec(f"ssh-key rename {fingerprint} {_shell_identifier(new_name)}")
 
     # -- User ---------------------------------------------------------------
 
@@ -857,9 +858,7 @@ class Client:
     # -- Shelley Agent ------------------------------------------------------
 
     def shelley_install(self, vm_name: str) -> None:
-        _validate_identifier(vm_name)
-        self._exec(f"shelley install {vm_name}")
+        self._exec(f"shelley install {_shell_identifier(vm_name)}")
 
     def shelley_prompt(self, vm_name: str, prompt: str) -> None:
-        _validate_identifier(vm_name)
-        self._exec(f'shelley prompt {vm_name} "{prompt}"')
+        self._exec(f'shelley prompt {_shell_identifier(vm_name)} "{prompt}"')
