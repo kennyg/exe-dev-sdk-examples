@@ -14,10 +14,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -28,13 +30,49 @@ import (
 // Validation
 // ---------------------------------------------------------------------------
 
-var safeValueRe = regexp.MustCompile(`^[a-zA-Z0-9._:@/\-]+$`)
+// Identifiers (VM, tag and key names) become shell words in the command
+// body and DNS labels in "{vm}.exe.xyz". Only ASCII letters, digits, hyphens
+// and underscores are allowed. A leading hyphen would read as a flag, and a
+// DNS label holds at most 63 characters.
+var identifierRe = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]*$`)
+
+const maxIdentifierLen = 63
 
 func validateIdentifier(value string) error {
-	if !safeValueRe.MatchString(value) {
+	if value == "" {
+		return &ExeDevError{StatusCode: 0, Message: "value must not be empty"}
+	}
+	if !identifierRe.MatchString(value) {
 		return &ExeDevError{StatusCode: 0, Message: "invalid characters in value"}
 	}
+	if len(value) > maxIdentifierLen {
+		return &ExeDevError{StatusCode: 0, Message: fmt.Sprintf("value exceeds %d characters", maxIdentifierLen)}
+	}
 	return nil
+}
+
+// fingerprintRe matches an SSH key fingerprint as ssh-keygen prints it:
+// "SHA256:" and the base64 SHA-256 digest, 43 characters without padding.
+var fingerprintRe = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{1,43}=?$`)
+
+func validateFingerprint(value string) error {
+	if !fingerprintRe.MatchString(value) {
+		return &ExeDevError{StatusCode: 0, Message: "invalid fingerprint"}
+	}
+	return nil
+}
+
+// shellSafeRe is the character set that needs no quoting, the same set as
+// Python's shlex.quote.
+var shellSafeRe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
+
+// shellQuote returns value as one POSIX shell word. It is defence in depth
+// after validation: a valid identifier or fingerprint comes back unchanged.
+func shellQuote(value string) string {
+	if shellSafeRe.MatchString(value) {
+		return value
+	}
+	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
 // doubleQuoteSpecial matches runs of the only characters that are special
@@ -596,7 +634,7 @@ func (c *Client) New(ctx context.Context, opts NewOpts) (*NewVMResponse, error) 
 		if err := validateIdentifier(*opts.Name); err != nil {
 			return nil, err
 		}
-		parts = append(parts, fmt.Sprintf("--name=%s", *opts.Name))
+		parts = append(parts, fmt.Sprintf("--name=%s", shellQuote(*opts.Name)))
 	}
 	if opts.Image != nil {
 		parts = append(parts, fmt.Sprintf("--image=%s", *opts.Image))
@@ -604,8 +642,9 @@ func (c *Client) New(ctx context.Context, opts NewOpts) (*NewVMResponse, error) 
 	if opts.Command != nil {
 		parts = append(parts, fmt.Sprintf("--command=%s", *opts.Command))
 	}
-	for k, v := range opts.Env {
-		parts = append(parts, fmt.Sprintf("--env=%s=%s", k, v))
+	// Go map order is random, so sort the keys for a stable command.
+	for _, k := range slices.Sorted(maps.Keys(opts.Env)) {
+		parts = append(parts, fmt.Sprintf("--env=%s=%s", k, opts.Env[k]))
 	}
 	for _, i := range opts.Integration {
 		parts = append(parts, fmt.Sprintf("--integration=%s", i))
@@ -635,13 +674,15 @@ func (c *Client) Rm(ctx context.Context, vmNames ...string) (*RmResponse, error)
 	if len(vmNames) == 0 {
 		return nil, &ExeDevError{StatusCode: 0, Message: "at least one VM name is required"}
 	}
-	for _, n := range vmNames {
+	names := make([]string, len(vmNames))
+	for i, n := range vmNames {
 		if err := validateIdentifier(n); err != nil {
 			return nil, err
 		}
+		names[i] = shellQuote(n)
 	}
 
-	body, err := c.exec(ctx, "rm "+strings.Join(vmNames, " "))
+	body, err := c.exec(ctx, "rm "+strings.Join(names, " "))
 	if err != nil {
 		return nil, err
 	}
@@ -659,7 +700,7 @@ func (c *Client) Restart(ctx context.Context, vmName string) (*RestartResponse, 
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("restart %s", vmName))
+	body, err := c.exec(ctx, fmt.Sprintf("restart %s", shellQuote(vmName)))
 	if err != nil {
 		return nil, err
 	}
@@ -680,7 +721,7 @@ func (c *Client) Rename(ctx context.Context, vmName, newName string) (*RenameRes
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("rename %s %s", vmName, newName))
+	body, err := c.exec(ctx, fmt.Sprintf("rename %s %s", shellQuote(vmName), shellQuote(newName)))
 	if err != nil {
 		return nil, err
 	}
@@ -697,12 +738,12 @@ func (c *Client) Cp(ctx context.Context, vmName string, newName *string) (*CpRes
 	if err := validateIdentifier(vmName); err != nil {
 		return nil, err
 	}
-	parts := []string{"cp", vmName}
+	parts := []string{"cp", shellQuote(vmName)}
 	if newName != nil {
 		if err := validateIdentifier(*newName); err != nil {
 			return nil, err
 		}
-		parts = append(parts, *newName)
+		parts = append(parts, shellQuote(*newName))
 	}
 	parts = append(parts, "--json")
 
@@ -727,7 +768,7 @@ func (c *Client) Tag(ctx context.Context, vmName, tagName string) (*TagResponse,
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("tag %s %s", vmName, tagName))
+	body, err := c.exec(ctx, fmt.Sprintf("tag %s %s", shellQuote(vmName), shellQuote(tagName)))
 	if err != nil {
 		return nil, err
 	}
@@ -748,7 +789,7 @@ func (c *Client) Untag(ctx context.Context, vmName, tagName string) (*TagRespons
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("tag -d %s %s", vmName, tagName))
+	body, err := c.exec(ctx, fmt.Sprintf("tag -d %s %s", shellQuote(vmName), shellQuote(tagName)))
 	if err != nil {
 		return nil, err
 	}
@@ -770,7 +811,7 @@ func (c *Client) ShareShow(ctx context.Context, vmName string) (*ShareInfo, erro
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share show %s --json", vmName))
+	body, err := c.exec(ctx, fmt.Sprintf("share show %s --json", shellQuote(vmName)))
 	if err != nil {
 		return nil, err
 	}
@@ -788,7 +829,7 @@ func (c *Client) ShareSetPublic(ctx context.Context, vmName string) (*ShareUpdat
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share set-public %s", vmName))
+	body, err := c.exec(ctx, fmt.Sprintf("share set-public %s", shellQuote(vmName)))
 	if err != nil {
 		return nil, err
 	}
@@ -806,7 +847,7 @@ func (c *Client) ShareSetPrivate(ctx context.Context, vmName string) (*ShareUpda
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share set-private %s", vmName))
+	body, err := c.exec(ctx, fmt.Sprintf("share set-private %s", shellQuote(vmName)))
 	if err != nil {
 		return nil, err
 	}
@@ -827,7 +868,7 @@ func (c *Client) SharePort(ctx context.Context, vmName string, port int) (*Share
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share port %s %d", vmName, port))
+	body, err := c.exec(ctx, fmt.Sprintf("share port %s %d", shellQuote(vmName), port))
 	if err != nil {
 		return nil, err
 	}
@@ -844,7 +885,7 @@ func (c *Client) ShareAdd(ctx context.Context, vmName, email string) error {
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("share add %s %s", vmName, email))
+	_, err := c.exec(ctx, fmt.Sprintf("share add %s %s", shellQuote(vmName), email))
 	return err
 }
 
@@ -853,7 +894,7 @@ func (c *Client) ShareRemove(ctx context.Context, vmName, email string) error {
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("share remove %s %s", vmName, email))
+	_, err := c.exec(ctx, fmt.Sprintf("share remove %s %s", shellQuote(vmName), email))
 	return err
 }
 
@@ -863,7 +904,7 @@ func (c *Client) ShareAddLink(ctx context.Context, vmName string) (*ShareAddLink
 		return nil, err
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share add-link %s --json", vmName))
+	body, err := c.exec(ctx, fmt.Sprintf("share add-link %s --json", shellQuote(vmName)))
 	if err != nil {
 		return nil, err
 	}
@@ -880,7 +921,7 @@ func (c *Client) ShareRemoveLink(ctx context.Context, vmName string) error {
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("share remove-link %s", vmName))
+	_, err := c.exec(ctx, fmt.Sprintf("share remove-link %s", shellQuote(vmName)))
 	return err
 }
 
@@ -894,7 +935,7 @@ func (c *Client) ShareReceiveEmail(ctx context.Context, vmName string, enabled b
 		state = "on"
 	}
 
-	body, err := c.exec(ctx, fmt.Sprintf("share receive-email %s %s", vmName, state))
+	body, err := c.exec(ctx, fmt.Sprintf("share receive-email %s %s", shellQuote(vmName), state))
 	if err != nil {
 		return nil, err
 	}
@@ -934,13 +975,22 @@ func (c *Client) SSHKeyAdd(ctx context.Context, publicKey string) error {
 
 // SSHKeyRemove removes a registered SSH key by fingerprint.
 func (c *Client) SSHKeyRemove(ctx context.Context, fingerprint string) error {
-	_, err := c.exec(ctx, fmt.Sprintf("ssh-key remove %s", fingerprint))
+	if err := validateFingerprint(fingerprint); err != nil {
+		return err
+	}
+	_, err := c.exec(ctx, fmt.Sprintf("ssh-key remove %s", shellQuote(fingerprint)))
 	return err
 }
 
 // SSHKeyRename renames a registered SSH key.
 func (c *Client) SSHKeyRename(ctx context.Context, fingerprint, newName string) error {
-	_, err := c.exec(ctx, fmt.Sprintf("ssh-key rename %s %s", fingerprint, newName))
+	if err := validateFingerprint(fingerprint); err != nil {
+		return err
+	}
+	if err := validateIdentifier(newName); err != nil {
+		return err
+	}
+	_, err := c.exec(ctx, fmt.Sprintf("ssh-key rename %s %s", shellQuote(fingerprint), shellQuote(newName)))
 	return err
 }
 
@@ -971,7 +1021,7 @@ func (c *Client) ShelleyInstall(ctx context.Context, vmName string) error {
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("shelley install %s", vmName))
+	_, err := c.exec(ctx, fmt.Sprintf("shelley install %s", shellQuote(vmName)))
 	return err
 }
 
@@ -980,7 +1030,7 @@ func (c *Client) ShelleyPrompt(ctx context.Context, vmName, prompt string) error
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s %s", vmName, doubleQuote(prompt)))
+	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s %s", shellQuote(vmName), doubleQuote(prompt)))
 	return err
 }
 
@@ -999,4 +1049,3 @@ func StringPtr(s string) *string {
 func Int64Ptr(i int64) *int64 {
 	return &i
 }
-
