@@ -49,15 +49,37 @@ func validateIdentifier(value string) error {
 	return nil
 }
 
-var shellSafeRe = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
+// fingerprintRe matches an SSH key fingerprint as ssh-keygen prints it:
+// "SHA256:" and the base64 SHA-256 digest, 43 characters without padding.
+var fingerprintRe = regexp.MustCompile(`^SHA256:[A-Za-z0-9+/]{1,43}=?$`)
+
+func validateFingerprint(value string) error {
+	if !fingerprintRe.MatchString(value) {
+		return &ExeDevError{StatusCode: 0, Message: "invalid fingerprint"}
+	}
+	return nil
+}
+
+// shellSafeRe is the character set that needs no quoting, the same set as
+// Python's shlex.quote.
+var shellSafeRe = regexp.MustCompile(`^[A-Za-z0-9_@%+=:,./-]+$`)
 
 // shellQuote returns value as one POSIX shell word. It is defence in depth
-// after validateIdentifier: a valid identifier comes back unchanged.
+// after validation: a valid identifier or fingerprint comes back unchanged.
 func shellQuote(value string) string {
 	if shellSafeRe.MatchString(value) {
 		return value
 	}
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
+}
+
+// doubleQuoteEscaper escapes the characters that stay special inside POSIX
+// double quotes: backslash, double quote, dollar and backtick.
+var doubleQuoteEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+
+// doubleQuote returns value inside double quotes as one POSIX shell word.
+func doubleQuote(value string) string {
+	return `"` + doubleQuoteEscaper.Replace(value) + `"`
 }
 
 // ---------------------------------------------------------------------------
@@ -619,7 +641,7 @@ func (c *Client) New(ctx context.Context, opts NewOpts) (*NewVMResponse, error) 
 		parts = append(parts, fmt.Sprintf("--integration=%s", i))
 	}
 	if opts.Prompt != nil {
-		parts = append(parts, fmt.Sprintf("--prompt=\"%s\"", *opts.Prompt))
+		parts = append(parts, "--prompt="+doubleQuote(*opts.Prompt))
 	}
 	if opts.NoEmail {
 		parts = append(parts, "--no-email")
@@ -944,16 +966,22 @@ func (c *Client) SSHKeyAdd(ctx context.Context, publicKey string) error {
 
 // SSHKeyRemove removes a registered SSH key by fingerprint.
 func (c *Client) SSHKeyRemove(ctx context.Context, fingerprint string) error {
-	_, err := c.exec(ctx, fmt.Sprintf("ssh-key remove %s", fingerprint))
+	if err := validateFingerprint(fingerprint); err != nil {
+		return err
+	}
+	_, err := c.exec(ctx, fmt.Sprintf("ssh-key remove %s", shellQuote(fingerprint)))
 	return err
 }
 
 // SSHKeyRename renames a registered SSH key.
 func (c *Client) SSHKeyRename(ctx context.Context, fingerprint, newName string) error {
+	if err := validateFingerprint(fingerprint); err != nil {
+		return err
+	}
 	if err := validateIdentifier(newName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("ssh-key rename %s %s", fingerprint, shellQuote(newName)))
+	_, err := c.exec(ctx, fmt.Sprintf("ssh-key rename %s %s", shellQuote(fingerprint), shellQuote(newName)))
 	return err
 }
 
@@ -993,7 +1021,7 @@ func (c *Client) ShelleyPrompt(ctx context.Context, vmName, prompt string) error
 	if err := validateIdentifier(vmName); err != nil {
 		return err
 	}
-	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s \"%s\"", shellQuote(vmName), prompt))
+	_, err := c.exec(ctx, fmt.Sprintf("shelley prompt %s %s", shellQuote(vmName), doubleQuote(prompt)))
 	return err
 }
 

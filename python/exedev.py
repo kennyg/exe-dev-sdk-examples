@@ -60,6 +60,29 @@ def _shell_identifier(value: str) -> str:
     return shlex.quote(value)
 
 
+# An SSH key fingerprint as ssh-keygen prints it: "SHA256:" and the
+# base64 SHA-256 digest, 43 characters without padding.
+_FINGERPRINT_RE = re.compile(r"SHA256:[A-Za-z0-9+/]{1,43}=?")
+
+
+def _shell_fingerprint(value: str) -> str:
+    """Validate a fingerprint and return it as one quoted shell word."""
+    if not isinstance(value, str) or not _FINGERPRINT_RE.fullmatch(value):
+        raise ExeDevError(0, "invalid fingerprint")
+    return shlex.quote(value)
+
+_DOUBLE_QUOTE_SPECIAL_RE = re.compile(r'([\\"$`])')
+
+
+def _double_quote(value: str) -> str:
+    """Return value inside double quotes as one POSIX shell word.
+
+    Inside double quotes only backslash, double quote, dollar and backtick
+    are special, so each one gets a backslash.
+    """
+    return '"' + _DOUBLE_QUOTE_SPECIAL_RE.sub(r"\\\1", value) + '"'
+
+
 # ---------------------------------------------------------------------------
 # Errors
 # ---------------------------------------------------------------------------
@@ -751,7 +774,7 @@ class Client:
             for i in integration:
                 parts.append(f"--integration={i}")
         if prompt is not None:
-            parts.append(f'--prompt="{prompt}"')
+            parts.append(f"--prompt={_double_quote(prompt)}")
         if no_email:
             parts.append("--no-email")
         parts.append("--json")
@@ -844,10 +867,11 @@ class Client:
         self._exec(f"ssh-key add {public_key}")
 
     def ssh_key_remove(self, fingerprint: str) -> None:
-        self._exec(f"ssh-key remove {fingerprint}")
+        self._exec(f"ssh-key remove {_shell_fingerprint(fingerprint)}")
 
     def ssh_key_rename(self, fingerprint: str, new_name: str) -> None:
-        self._exec(f"ssh-key rename {fingerprint} {_shell_identifier(new_name)}")
+        fp, name = _shell_fingerprint(fingerprint), _shell_identifier(new_name)
+        self._exec(f"ssh-key rename {fp} {name}")
 
     # -- User ---------------------------------------------------------------
 
@@ -861,4 +885,4 @@ class Client:
         self._exec(f"shelley install {_shell_identifier(vm_name)}")
 
     def shelley_prompt(self, vm_name: str, prompt: str) -> None:
-        self._exec(f'shelley prompt {_shell_identifier(vm_name)} "{prompt}"')
+        self._exec(f"shelley prompt {_shell_identifier(vm_name)} {_double_quote(prompt)}")

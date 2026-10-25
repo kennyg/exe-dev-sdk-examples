@@ -273,3 +273,66 @@ func TestShellQuote(t *testing.T) {
 		}
 	}
 }
+
+func TestFingerprintInvalidNeverReachesTheServer(t *testing.T) {
+	calls := []struct {
+		name string
+		call func(c *Client, v string) error
+	}{
+		{"SSHKeyRemove", func(c *Client, v string) error { return c.SSHKeyRemove(context.Background(), v) }},
+		{"SSHKeyRename(fingerprint)", func(c *Client, v string) error {
+			return c.SSHKeyRename(context.Background(), v, "work-laptop")
+		}},
+	}
+	invalid := []struct{ name, value string }{
+		{"command", "SHA256:x; rm -rf /"},
+		{"parent dir", "../etc --all"},
+		{"dot-dot in digest", "SHA256:../etc"},
+		{"space", "SHA256:abc def"},
+		{"subshell", "SHA256:$(id)"},
+		{"trailing newline", "SHA256:abc123\n"},
+		{"no prefix", "abc123"},
+		{"md5", "MD5:aa:bb:cc"},
+		{"lower-case prefix", "sha256:abc123"},
+		{"empty digest", "SHA256:"},
+		{"empty", ""},
+		{"too long", "SHA256:" + strings.Repeat("a", 44)},
+		{"double padding", "SHA256:abc=="},
+		{"cyrillic a", "SHA256:аbc"},
+		{"leading hyphen", "-SHA256:abc"},
+	}
+	for _, call := range calls {
+		for _, tc := range invalid {
+			t.Run(call.name+"/"+tc.name, func(t *testing.T) {
+				rs := newRecordingServer(t)
+				err := call.call(rs.client(t), tc.value)
+				assertRejectedLocally(t, rs, err, "invalid fingerprint")
+			})
+		}
+	}
+}
+
+func TestFingerprintValidValuesAreSentUnchanged(t *testing.T) {
+	ctx := context.Background()
+	for _, v := range []string{
+		"SHA256:abc123",
+		"SHA256:ExampleFingerprint123",
+		"SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8",
+		"SHA256:a+b/c=",
+	} {
+		t.Run(v, func(t *testing.T) {
+			rs := newRecordingServer(t)
+			c := rs.client(t)
+			if err := c.SSHKeyRemove(ctx, v); err != nil {
+				t.Fatalf("SSHKeyRemove: %v", err)
+			}
+			if err := c.SSHKeyRename(ctx, v, "work-laptop"); err != nil {
+				t.Fatalf("SSHKeyRename: %v", err)
+			}
+			want := []string{"ssh-key remove " + v, "ssh-key rename " + v + " work-laptop"}
+			if got := rs.bodies(); strings.Join(got, "\n") != strings.Join(want, "\n") {
+				t.Errorf("bodies = %q, want %q", got, want)
+			}
+		})
+	}
+}
