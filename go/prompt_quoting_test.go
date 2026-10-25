@@ -8,100 +8,93 @@ import (
 	"testing"
 )
 
-// ---------------------------------------------------------------------------
-// Prompt quoting regression tests, over real HTTP
-// ---------------------------------------------------------------------------
+// Regression tests: a prompt reaches the server as exactly one shell word.
+// The client talks to a real HTTP server (httptest). Each test runs the
+// request body in /bin/sh, with shelley and new defined as functions that
+// print their arguments, and checks that sh gives back the exact prompt.
 
-// shWords splits body into POSIX shell words with a real shell.
+var quotingPrompts = []string{
+	`say "hi"; echo pwned`,
+	"it's here",
+	`back\slash`,
+	`trailing backslash\`,
+	`escaped \" quote`,
+	"$(echo pwned)",
+	"`echo pwned`",
+	"$HOME ${HOME} $1 $$",
+	"line one\nline two",
+	"backslash then newline\\\nnext",
+	"crlf\r\nline",
+	"a; b && c || d | e > f < g & h",
+	"tab\there",
+	"!history !! !-1",
+	"*glob? [abc] ~user {a,b}",
+	"非ASCII テキスト — café, emoji 🚀",
+	"",
+	" leading and trailing spaces ",
+	"\"'\\$`;\n",
+}
+
+const newVMBody = `{"vm_name":"dev","ssh_command":"ssh dev.exe.xyz","ssh_dest":"dev.exe.xyz","ssh_port":22,"https_url":"https://dev.exe.xyz","proxy_port":8000,"shelley_url":"https://dev.shelley.exe.xyz","vscode_url":"vscode://vscode-remote/ssh-remote+dev.exe.xyz/home/exedev?windowId=_blank","xterm_url":"https://dev.xterm.exe.xyz"}`
+
+// shWords runs body in /bin/sh and returns the words the command received.
 func shWords(t *testing.T, body string) []string {
 	t.Helper()
-	out, err := exec.Command("sh", "-c", `eval "set -- $1"; printf '%s\0' "$@"`, "sh", body).Output()
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("needs /bin/sh")
+	}
+	script := "shelley() { printf '%s\\0' shelley \"$@\"; }\n" +
+		"new() { printf '%s\\0' new \"$@\"; }\n" + body
+	out, err := exec.Command("/bin/sh", "-c", script).Output()
 	if err != nil {
-		t.Fatalf("sh could not split %q: %v", body, err)
+		t.Fatalf("sh failed on body %q: %v", body, err)
 	}
 	words := strings.Split(string(out), "\x00")
 	return words[:len(words)-1]
 }
 
-var quotingPrompts = []struct{ name, prompt string }{
-	{"plain", "create a hello world app"},
-	{"double quotes", `say "hi"; echo pwned`},
-	{"closing quote", `"; echo pwned; "`},
-	{"single quote", "it's fine"},
-	{"backslash", `a\b`},
-	{"trailing backslash", `ends with \`},
-	{"backslash before quote", `\"; echo pwned; \"`},
-	{"command substitution", "$(echo pwned)"},
-	{"backticks", "`echo pwned`"},
-	{"variable", "$HOME and ${PATH}"},
-	{"arithmetic", "$((1+1))"},
-	{"semicolon and pipe", "a; b | c && d"},
-	{"newline", "line one\nline two"},
-	{"glob", "*.go ?"},
-	{"history", "!! and !$"},
-	{"unicode", "café — “quoted”"},
-	{"empty", ""},
-}
-
-func TestShelleyPromptIsOneUnchangedWord(t *testing.T) {
-	for _, tc := range quotingPrompts {
-		t.Run(tc.name, func(t *testing.T) {
-			rs := newRecordingServer(t)
-			if err := rs.client(t).ShelleyPrompt(context.Background(), "dev", tc.prompt); err != nil {
-				t.Fatalf("ShelleyPrompt: %v", err)
+func TestShelleyPromptQuoting(t *testing.T) {
+	for _, prompt := range quotingPrompts {
+		t.Run(prompt, func(t *testing.T) {
+			m := mockServer(200, "")
+			defer m.server.Close()
+			c := newTestClient(t, m)
+			if err := c.ShelleyPrompt(context.Background(), "dev", prompt); err != nil {
+				t.Fatalf("ShelleyPrompt() error: %v", err)
 			}
-			bodies := rs.bodies()
-			if len(bodies) != 1 {
-				t.Fatalf("server received %d requests, want 1", len(bodies))
-			}
-			want := []string{"shelley", "prompt", "dev", tc.prompt}
-			if got := shWords(t, bodies[0]); !reflect.DeepEqual(got, want) {
-				t.Errorf("body %q splits to %q, want %q", bodies[0], got, want)
+			got := shWords(t, m.body())
+			want := []string{"shelley", "prompt", "dev", prompt}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("body %q gives words %q, want %q", m.body(), got, want)
 			}
 		})
 	}
 }
 
-func TestNewPromptIsOneUnchangedWord(t *testing.T) {
-	for _, tc := range quotingPrompts {
-		t.Run(tc.name, func(t *testing.T) {
-			rs := newRecordingServer(t)
-			name, prompt := "dev", tc.prompt
-			if _, err := rs.client(t).New(context.Background(), NewOpts{Name: &name, Prompt: &prompt}); err != nil {
-				t.Fatalf("New: %v", err)
+func TestNewPromptQuoting(t *testing.T) {
+	for _, prompt := range quotingPrompts {
+		t.Run(prompt, func(t *testing.T) {
+			m := mockServer(200, newVMBody)
+			defer m.server.Close()
+			c := newTestClient(t, m)
+			if _, err := c.New(context.Background(), NewOpts{Name: strPtr("dev"), Prompt: strPtr(prompt)}); err != nil {
+				t.Fatalf("New() error: %v", err)
 			}
-			bodies := rs.bodies()
-			if len(bodies) != 1 {
-				t.Fatalf("server received %d requests, want 1", len(bodies))
-			}
-			want := []string{"new", "--name=dev", "--prompt=" + tc.prompt, "--json"}
-			if got := shWords(t, bodies[0]); !reflect.DeepEqual(got, want) {
-				t.Errorf("body %q splits to %q, want %q", bodies[0], got, want)
+			got := shWords(t, m.body())
+			want := []string{"new", "--name=dev", "--prompt=" + prompt, "--json"}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("body %q gives words %q, want %q", m.body(), got, want)
 			}
 		})
 	}
 }
 
-func TestPromptWireFormat(t *testing.T) {
-	ctx := context.Background()
-	for prompt, quoted := range map[string]string{
-		"create a hello world app": `"create a hello world app"`,
-		`say "hi"; echo pwned`:     `"say \"hi\"; echo pwned"`,
-		`a\b`:                      `"a\\b"`,
-		"$(id) `id`":               "\"\\$(id) \\`id\\`\"",
-	} {
-		rs := newRecordingServer(t)
-		c := rs.client(t)
-		if err := c.ShelleyPrompt(ctx, "dev", prompt); err != nil {
-			t.Fatalf("ShelleyPrompt: %v", err)
-		}
-		p := prompt
-		if _, err := c.New(ctx, NewOpts{Prompt: &p}); err != nil {
-			t.Fatalf("New: %v", err)
-		}
-		want := []string{"shelley prompt dev " + quoted, "new --prompt=" + quoted + " --json"}
-		if got := rs.bodies(); !reflect.DeepEqual(got, want) {
-			t.Errorf("bodies = %q, want %q", got, want)
-		}
+func TestBreakoutPromptIsEscaped(t *testing.T) {
+	m := mockServer(200, "")
+	defer m.server.Close()
+	c := newTestClient(t, m)
+	if err := c.ShelleyPrompt(context.Background(), "dev", "say \"hi\"; echo $(id) `id` \\"); err != nil {
+		t.Fatalf("ShelleyPrompt() error: %v", err)
 	}
+	assertCommand(t, m.body, `shelley prompt dev "say "'"'"hi"'"'"; echo "'$'"(id) "'`+"`"+`'"id"'`+"`"+`'" "'\'""`)
 }

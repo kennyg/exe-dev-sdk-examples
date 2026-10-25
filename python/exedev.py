@@ -71,16 +71,17 @@ def _shell_fingerprint(value: str) -> str:
         raise ExeDevError(0, "invalid fingerprint")
     return shlex.quote(value)
 
-_DOUBLE_QUOTE_SPECIAL_RE = re.compile(r'([\\"$`])')
-
 
 def _double_quote(value: str) -> str:
-    """Return value inside double quotes as one POSIX shell word.
+    """Quote value as one POSIX shell word, in double quotes.
 
-    Inside double quotes only backslash, double quote, dollar and backtick
-    are special, so each one gets a backslash.
+    Inside double quotes, only `\\`, `"`, `$` and backtick are special
+    (POSIX XCU 2.2.3). Each run of them goes in single quotes instead, where
+    no character is special. The adjacent quoted parts join into one word
+    that expands to exactly `value`. The form uses no backslash escapes, so
+    `sh`, Python `shlex` and other POSIX word splitters all agree on it.
     """
-    return '"' + _DOUBLE_QUOTE_SPECIAL_RE.sub(r"\\\1", value) + '"'
+    return '"' + re.sub(r'[\\"$`]+', lambda m: "\"'" + m.group() + "'\"", value) + '"'
 
 
 # ---------------------------------------------------------------------------

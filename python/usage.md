@@ -112,7 +112,7 @@ VM names, tag names and SSH key names must be 1 to 63 ASCII letters, digits, hyp
 
 SSH key fingerprints must have the form `ssh-keygen` prints, `SHA256:` and a base64 digest of at most 43 characters, such as `SHA256:nThbg6kXUpJWGl7E1IGOCspRomTxdCARLviKw6E5SY8`. Any other fingerprint gets the message `invalid fingerprint`, and no request goes to the server.
 
-The SDK puts a prompt into the command in double quotes and escapes `\`, `"`, `$` and backticks, so the server receives the prompt text unchanged.
+The SDK puts a prompt into the command in double quotes. Each run of `\`, `"`, `$` or backticks goes in single quotes inside them, so the server receives the prompt text unchanged.
 
 ## Token Generation
 

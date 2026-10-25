@@ -73,13 +73,19 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'"'"'`) + "'"
 }
 
-// doubleQuoteEscaper escapes the characters that stay special inside POSIX
-// double quotes: backslash, double quote, dollar and backtick.
-var doubleQuoteEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, `$`, `\$`, "`", "\\`")
+// doubleQuoteSpecial matches runs of the only characters that are special
+// inside POSIX shell double quotes (XCU 2.2.3).
+var doubleQuoteSpecial = regexp.MustCompile("[\\\\\"$`]+")
 
-// doubleQuote returns value inside double quotes as one POSIX shell word.
+// doubleQuote quotes value as one POSIX shell word, in double quotes. Each run
+// of special characters goes in single quotes instead, where no character is
+// special. The adjacent quoted parts join into one word that expands to
+// exactly value. The form uses no backslash escapes, so sh and other POSIX
+// word splitters all agree on it.
 func doubleQuote(value string) string {
-	return `"` + doubleQuoteEscaper.Replace(value) + `"`
+	return `"` + doubleQuoteSpecial.ReplaceAllStringFunc(value, func(run string) string {
+		return `"'` + run + `'"`
+	}) + `"`
 }
 
 // ---------------------------------------------------------------------------
