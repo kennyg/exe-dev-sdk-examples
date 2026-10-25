@@ -14,10 +14,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 
 	"golang.org/x/crypto/ssh"
@@ -640,8 +642,9 @@ func (c *Client) New(ctx context.Context, opts NewOpts) (*NewVMResponse, error) 
 	if opts.Command != nil {
 		parts = append(parts, fmt.Sprintf("--command=%s", *opts.Command))
 	}
-	for k, v := range opts.Env {
-		parts = append(parts, fmt.Sprintf("--env=%s=%s", k, v))
+	// Go map order is random, so sort the keys for a stable command.
+	for _, k := range slices.Sorted(maps.Keys(opts.Env)) {
+		parts = append(parts, fmt.Sprintf("--env=%s=%s", k, opts.Env[k]))
 	}
 	for _, i := range opts.Integration {
 		parts = append(parts, fmt.Sprintf("--integration=%s", i))
@@ -1046,4 +1049,3 @@ func StringPtr(s string) *string {
 func Int64Ptr(i int64) *int64 {
 	return &i
 }
-
